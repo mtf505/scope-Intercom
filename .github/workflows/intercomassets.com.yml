@@ -1,0 +1,81 @@
+name: intercomassets.com Automated Subdomain & Nuclei Scan
+
+on:
+  schedule:
+    - cron: '20 0 * * *'   # 4:00 AM Muscat time (0:00 UTC + 4)
+    - cron: '20 4 * * *'   # 8:00 AM Muscat time (4:00 UTC + 4)
+    - cron: '20 8 * * *'   # 12:00 PM Muscat time (8:00 UTC + 4)
+    - cron: '20 12 * * *'  # 4:00 PM Muscat time (12:00 UTC + 4)
+    - cron: '20 16 * * *'  # 8:00 PM Muscat time (16:00 UTC + 4)
+    - cron: '20 20 * * *'  # 12:00 AM Muscat time (20:00 UTC + 4) 
+  workflow_dispatch:
+
+jobs:
+  security_scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1000
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Fetch Latest Versions & Install Tools
+        run: |
+          SUBFINDER_TAG=$(curl -s https://api.github.com/repos/projectdiscovery/subfinder/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+          NUCLEI_TAG=$(curl -s https://api.github.com/repos/projectdiscovery/nuclei/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+          HTTPX_TAG=$(curl -s https://api.github.com/repos/projectdiscovery/httpx/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+          
+          SUBFINDER_VER=${SUBFINDER_TAG#v}
+          NUCLEI_VER=${NUCLEI_TAG#v}
+          HTTPX_VER=${HTTPX_TAG#v}
+          
+          echo "Installing Subfinder $SUBFINDER_TAG, Nuclei $NUCLEI_TAG, Httpx $HTTPX_TAG"
+          
+          wget -q https://github.com/projectdiscovery/subfinder/releases/download/${SUBFINDER_TAG}/subfinder_${SUBFINDER_VER}_linux_amd64.zip
+          unzip -o subfinder_${SUBFINDER_VER}_linux_amd64.zip -d /usr/local/bin/
+          
+          wget -q https://github.com/projectdiscovery/nuclei/releases/download/${NUCLEI_TAG}/nuclei_${NUCLEI_VER}_linux_amd64.zip
+          unzip -o nuclei_${NUCLEI_VER}_linux_amd64.zip -d /usr/local/bin/
+          
+          wget -q https://github.com/projectdiscovery/httpx/releases/download/${HTTPX_TAG}/httpx_${HTTPX_VER}_linux_amd64.zip
+          unzip -o httpx_${HTTPX_VER}_linux_amd64.zip -d /usr/local/bin/
+
+      - name: Update Nuclei Templates
+        run: nuclei -update-templates
+
+      - name: Enumerate Subdomains
+        run: |
+          subfinder -d intercomassets.com -all -timeout 10 -o subdomains_raw.txt
+          echo "[+] Total subdomains found: $(wc -l < subdomains_raw.txt)"
+
+      - name: Filter Live Domains (Httpx)
+        run: |
+          # -silent: مخرجات نظيفة فقط
+          # -sc: إظهار status code
+          # -fc 404,403: استبعاد صفحات غير مفيدة
+          # -threads 100: تسريع الفحص
+          cat subdomains_raw.txt | httpx -silent -sc -fc 404,403 -threads 100 -timeout 10 -o live_domains_full.txt
+          
+          # استخراج الـ URLs فقط بدون status code
+          awk '{print $1}' live_domains_full.txt > live_domains.txt
+          
+          echo "[+] Live domains count: $(wc -l < live_domains.txt)"
+
+      - name: Run Nuclei Scan on Live Domains Only
+        run: |
+          nuclei -l live_domains.txt \
+            -severity low,medium,high,critical \
+            -timeout 5 \
+            -retries 1 \
+            -rate-limit 150 \
+            -c 50 \
+            -o nuclei_report.txt
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-messenger.intercom.com-scan-reports
+          path: |
+            subdomains_raw.txt
+            live_domains.txt
+            nuclei_report.txt
