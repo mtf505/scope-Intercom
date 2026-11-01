@@ -74,7 +74,7 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: mobile-messenger.intercom.com-scan-reports
+          name: intercomassets.com-scan-reports
           path: |
             subdomains_raw.txt
             live_domains.txt
